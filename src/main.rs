@@ -7,6 +7,7 @@ extern crate byteorder;
 extern crate clap;
 extern crate dirs;
 extern crate hex;
+extern crate indy_crypto;
 extern crate libp2p;
 extern crate rand;
 extern crate ring;
@@ -17,23 +18,20 @@ extern crate sled;
 // extern crate test;
 use std::time::SystemTime;
 
-// use bincode::{deserialize, serialize};
+use bip39::{Language, Mnemonic};
 use bit_vec::BitVec;
 use byteorder::{LittleEndian, WriteBytesExt};
 use clap::{App, SubCommand};
+use indy_crypto::bls::{Bls, SignKey};
 use ring::digest::{digest, SHA256};
-use secp256k1::rand::OsRng;
-use secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
-// use serde::ser::Serializer;
-use bincode::serialize;
 use sled::Db;
 
 // use test::Bencher;
 
-fn gen_keys() -> (SecretKey, PublicKey) {
-    let secp = Secp256k1::new();
-    let mut rng = OsRng::new().expect("OsRng");
-    secp.generate_keypair(&mut rng)
+fn gen_keys() -> (SignKey, SignKey) {
+    let sign_key1 = SignKey::new(None).unwrap();
+    let sign_key2 = SignKey::new(None).unwrap();
+    (sign_key1, sign_key2)
 }
 
 fn sha256(data: &[u8]) -> Vec<u8> {
@@ -90,24 +88,26 @@ fn main() {
     let internal_db = Db::start_default(internal_path).unwrap();
 
     if matches.subcommand_matches("init").is_some() {
-        let (secret_key, public_key) = gen_keys();
+        let (sign_key1, sign_key2) = gen_keys();
         internal_db
-            .set("secret_key", serialize(&secret_key).unwrap())
+            .set("hot_key", sign_key1.as_bytes().to_vec())
             .unwrap();
-        println!("{:?}", public_key);
+        internal_db
+            .set("cold_key", sign_key2.as_bytes().to_vec())
+            .unwrap();
+        let mnemonic = Mnemonic::from_entropy(sign_key2.as_bytes(), Language::English).unwrap();
+        let phrase: &str = mnemonic.phrase();
+        println!("Your cold key phrase: {}", phrase);
     }
 
     if matches.subcommand_matches("hashrate").is_some() {
         const MESSAGE: &[u8] = b"hello, world";
-        match internal_db.get("secret_key").unwrap() {
+        match internal_db.get("hot_key").unwrap() {
             Some(key) => {
-                let secp = Secp256k1::new();
                 println!("{:?}", key);
-                let secret_key = SecretKey::from_slice(&key).unwrap();
-                let hash = sha256(&MESSAGE);
-                let message = Message::from_slice(&hash.as_slice()).unwrap();
-                let signature = secp.sign(&message, &secret_key);
-                hashrate(&signature.serialize_compact(), 32);
+                let hot_key = SignKey::from_bytes(&key).unwrap();
+                let signature = Bls::sign(&MESSAGE, &hot_key).unwrap();
+                hashrate(signature.as_bytes(), 32);
             }
             None => println!("Secret key not found. Please run `hashd init` first."),
         }
