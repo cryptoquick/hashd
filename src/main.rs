@@ -21,7 +21,7 @@ use std::time::SystemTime;
 use bip39::{Language, Mnemonic};
 use bit_vec::BitVec;
 use byteorder::{LittleEndian, WriteBytesExt};
-use clap::{App, SubCommand};
+use clap::{App, Arg, SubCommand};
 use indy_crypto::bls::{Bls, SignKey};
 use ring::digest::{digest, SHA256};
 use sled::Db;
@@ -74,18 +74,47 @@ fn hashrate(signature: &[u8], target_difficulty: u8) {
     }
 }
 
+fn concatenate_merge(
+    _key: &[u8],              // the key being merged
+    old_value: Option<&[u8]>, // the previous value, if one existed
+    merged_bytes: &[u8],      // the new bytes being merged in
+) -> Option<Vec<u8>> {
+    let mut ret = old_value.map(|ov| ov.to_vec()).unwrap_or_else(|| vec![]);
+    ret.extend_from_slice(merged_bytes);
+    Some(ret)
+}
+
 fn main() {
     let matches = App::new("hashd")
         .author("Hunter T. <cryptoquick@gmail.com>")
         .about("A PoW database")
         .subcommand(SubCommand::with_name("init"))
         .subcommand(SubCommand::with_name("hashrate"))
+        .subcommand(
+            SubCommand::with_name("set")
+                .arg(
+                    Arg::with_name("volume")
+                        .short("v")
+                        .takes_value(true)
+                        .required(false),
+                )
+                .arg(Arg::with_name("message").index(1).required(true))
+                .arg(Arg::with_name("tag").index(2).required(true)),
+        )
+        .subcommand(SubCommand::with_name("get"))
         .get_matches();
 
     let mut internal_path = dirs::home_dir().unwrap();
     internal_path.push(".hashd");
     internal_path.push("internal");
     let internal_db = Db::start_default(internal_path).unwrap();
+
+    let index_config = sled::ConfigBuilder::new()
+        .temporary(true)
+        .merge_operator(concatenate_merge)
+        .build();
+
+    let index = sled::Db::start(index_config).unwrap();
 
     if matches.subcommand_matches("init").is_some() {
         let (sign_key1, sign_key2) = gen_keys();
@@ -112,4 +141,16 @@ fn main() {
             None => println!("Secret key not found. Please run `hashd init` first."),
         }
     }
+
+    match matches.subcommand() {
+        ("set", Some(sub_matches)) => {
+            let volume = sub_matches.value_of("volume").unwrap_or("0");
+            let message = sub_matches.value_of("message").unwrap();
+            let tag = sub_matches.value_of("tag").unwrap();
+            println!("Message: \"{}\" #{}\nVolume: {}", message, tag, volume);
+        }
+        _ => println!("No command given!"),
+    }
+
+    // if matches.subcommand_matches("get").is_some() {}
 }
