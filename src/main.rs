@@ -76,6 +76,7 @@ fn concatenate_merge(
     merged_bytes: &[u8],      // the new bytes being merged in
 ) -> Option<Vec<u8>> {
     let mut ret = old_value.map(|ov| ov.to_vec()).unwrap_or_else(|| vec![]);
+    ret.extend_from_slice("\n".as_bytes());
     ret.extend_from_slice(merged_bytes);
     Some(ret)
 }
@@ -105,40 +106,42 @@ fn main() {
     internal_path.push("internal");
     let internal_db = Db::start_default(internal_path).unwrap();
 
+    let mut index_path = dirs::home_dir().unwrap();
+    index_path.push(".hashd");
+    index_path.push("index");
+
     let index_config = sled::ConfigBuilder::new()
-        .temporary(true)
+        .path(index_path)
         .merge_operator(concatenate_merge)
         .build();
 
     let index = sled::Db::start(index_config).unwrap();
 
-    if matches.subcommand_matches("init").is_some() {
-        let (sign_key1, sign_key2) = gen_keys();
-        internal_db
-            .set("hot_key", sign_key1.as_bytes().to_vec())
-            .unwrap();
-        internal_db
-            .set("cold_key", sign_key2.as_bytes().to_vec())
-            .unwrap();
-        let mnemonic = Mnemonic::from_entropy(sign_key2.as_bytes(), Language::English).unwrap();
-        let phrase: &str = mnemonic.phrase();
-        println!("Your cold key phrase: {}", phrase);
-    }
-
-    if matches.subcommand_matches("hashrate").is_some() {
-        const MESSAGE: &[u8] = b"hello, world";
-        match internal_db.get("hot_key").unwrap() {
-            Some(key) => {
-                println!("{:?}", key);
-                let hot_key = SignKey::from_bytes(&key).unwrap();
-                let signature = Bls::sign(&MESSAGE, &hot_key).unwrap();
-                hashrate(signature.as_bytes(), 32);
-            }
-            None => println!("Secret key not found. Please run `hashd init` first."),
-        }
-    }
-
     match matches.subcommand() {
+        ("init", Some(_)) => {
+            let (sign_key1, sign_key2) = gen_keys();
+            internal_db
+                .set(b"hot_key", sign_key1.as_bytes().to_vec())
+                .unwrap();
+            internal_db
+                .set(b"cold_key", sign_key2.as_bytes().to_vec())
+                .unwrap();
+            let mnemonic = Mnemonic::from_entropy(sign_key2.as_bytes(), Language::English).unwrap();
+            let phrase: &str = mnemonic.phrase();
+            println!("Your cold key phrase: {}", phrase);
+        }
+        ("hashrate", Some(_)) => {
+            const MESSAGE: &[u8] = b"hello, world";
+            match internal_db.get(b"hot_key").unwrap() {
+                Some(key) => {
+                    println!("{:?}", key);
+                    let hot_key = SignKey::from_bytes(&key).unwrap();
+                    let signature = Bls::sign(&MESSAGE, &hot_key).unwrap();
+                    hashrate(signature.as_bytes(), 32);
+                }
+                None => println!("Secret key not found. Please run `hashd init` first."),
+            }
+        }
         ("set", Some(sub_matches)) => {
             let volume = sub_matches.value_of("volume").unwrap_or("0");
             let difficulty = volume.parse::<u8>().unwrap();
@@ -147,13 +150,16 @@ fn main() {
 
             println!("Message: \"{}\" #{}\nVolume: {}", message, tag, volume);
 
-            match internal_db.get("hot_key").unwrap() {
+            match internal_db.get(b"hot_key").unwrap() {
                 Some(key) => {
                     let hot_key = SignKey::from_bytes(&key).unwrap();
                     let signature = Bls::sign(&message.as_bytes(), &hot_key).unwrap();
                     let (result, nonce) = pow(signature.as_bytes(), difficulty as usize, 0);
+                    println!("{:?}", tag);
 
-                    index.merge(tag, message.as_bytes().to_vec()).unwrap();
+                    index
+                        .merge(tag.as_bytes(), message.as_bytes().to_vec())
+                        .unwrap();
 
                     println!(
                         "Posted with hash: {}, and nonce: {}",
@@ -166,10 +172,17 @@ fn main() {
         }
         ("get", Some(sub_matches)) => {
             let tag = sub_matches.value_of("tag").unwrap();
-            let messages = index.get(tag).unwrap();
 
-            for message in messages {
-                println!("{}", str::from_utf8(&message).unwrap());
+            match index.get(tag.as_bytes()).unwrap() {
+                Some(messages_bytes) => {
+                    let messages_string = str::from_utf8(&messages_bytes).unwrap();
+                    let messages = messages_string.split("\n");
+
+                    for message in messages {
+                        println!("{}", message);
+                    }
+                }
+                None => println!("No messages for that tag found."),
             }
         }
         _ => println!("No command given!"),
