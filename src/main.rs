@@ -1,21 +1,17 @@
 // #![feature(test)]
 
 // #[macro_use]
-extern crate bincode;
 extern crate bit_vec;
 extern crate byteorder;
 extern crate clap;
 extern crate dirs;
 extern crate hex;
 extern crate indy_crypto;
-extern crate libp2p;
-extern crate rand;
 extern crate ring;
-extern crate secp256k1;
-extern crate serde_derive;
 extern crate sled;
 
 // extern crate test;
+use std::str;
 use std::time::SystemTime;
 
 use bip39::{Language, Mnemonic};
@@ -101,7 +97,7 @@ fn main() {
                 .arg(Arg::with_name("message").index(1).required(true))
                 .arg(Arg::with_name("tag").index(2).required(true)),
         )
-        .subcommand(SubCommand::with_name("get"))
+        .subcommand(SubCommand::with_name("get").arg(Arg::with_name("tag").index(1).required(true)))
         .get_matches();
 
     let mut internal_path = dirs::home_dir().unwrap();
@@ -145,12 +141,37 @@ fn main() {
     match matches.subcommand() {
         ("set", Some(sub_matches)) => {
             let volume = sub_matches.value_of("volume").unwrap_or("0");
+            let difficulty = volume.parse::<u8>().unwrap();
             let message = sub_matches.value_of("message").unwrap();
             let tag = sub_matches.value_of("tag").unwrap();
+
             println!("Message: \"{}\" #{}\nVolume: {}", message, tag, volume);
+
+            match internal_db.get("hot_key").unwrap() {
+                Some(key) => {
+                    let hot_key = SignKey::from_bytes(&key).unwrap();
+                    let signature = Bls::sign(&message.as_bytes(), &hot_key).unwrap();
+                    let (result, nonce) = pow(signature.as_bytes(), difficulty as usize, 0);
+
+                    index.merge(tag, message.as_bytes().to_vec()).unwrap();
+
+                    println!(
+                        "Posted with hash: {}, and nonce: {}",
+                        hex::encode(result),
+                        nonce
+                    );
+                }
+                None => println!("Secret key not found. Please run `hashd init` first."),
+            }
+        }
+        ("get", Some(sub_matches)) => {
+            let tag = sub_matches.value_of("tag").unwrap();
+            let messages = index.get(tag).unwrap();
+
+            for message in messages {
+                println!("{}", str::from_utf8(&message).unwrap());
+            }
         }
         _ => println!("No command given!"),
     }
-
-    // if matches.subcommand_matches("get").is_some() {}
 }
