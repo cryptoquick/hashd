@@ -1,0 +1,17 @@
+[package]
+name = "hashd"
+version = "0.1.0"
+authors = ["Hunter Trujillo <cryptoquick@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.32.0"
+sled = "0.18.1"
+libp2p = "0.3.1"
+ring = "0.14.6"
+byteorder = "1.3.1"
+untrusted = "0.6.2"
+hex = "0.3.2"
+bit-vec = "0.5.0"
+secp256k1 = "0.12.2"
+rand = "0.6.5"
